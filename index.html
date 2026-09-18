@@ -701,6 +701,15 @@ html{overflow-y:scroll;scrollbar-gutter:stable}
  }
  function dictionaryModeActive(){return dictionaryAll||dictionarySentence>=0;}
  function dictionaryAppliesTo(i){return dictionaryAll||dictionarySentence===i;}
+ function deactivateDictionaryMode(){
+  if(!dictionaryModeActive())return false;
+  dictionaryAll=false;
+  dictionarySentence=-1;
+  message='';
+  syncDictionaryUI();
+  update();
+  return true;
+ }
  function pauseForDictionary(){
   ++token;
   audios.forEach(a=>a.pause());
@@ -709,12 +718,72 @@ html{overflow-y:scroll;scrollbar-gutter:stable}
  function dictionaryTerm(button){
   return (button.textContent||'').trim().replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9'-]+$/g,'');
  }
+ const dictionaryReturnStateKey='dictionaryReturnStateV1';
+ function saveDictionaryReturnState(){
+  try{
+   const sections={};
+   document.querySelectorAll('.window-toggle').forEach(button=>{
+    sections[button.getAttribute('aria-controls')]=button.getAttribute('aria-expanded')==='true';
+   });
+   sessionStorage.setItem(dictionaryReturnStateKey,JSON.stringify({
+    scrollY:window.scrollY||0,
+    fullPassageOpen:!fullPassage.hidden,
+    sentenceOpen:sentenceToggles.map(button=>button.getAttribute('aria-expanded')==='true'),
+    sections,
+    dictionaryAll,
+    dictionarySentence
+   }));
+  }catch(_){}
+ }
+ function restoreDictionaryReturnState(){
+  let state=null;
+  try{
+   const raw=sessionStorage.getItem(dictionaryReturnStateKey);
+   if(!raw)return;
+   sessionStorage.removeItem(dictionaryReturnStateKey);
+   state=JSON.parse(raw);
+  }catch(_){return;}
+  if(!state||typeof state!=='object')return;
+  if(Array.isArray(state.sentenceOpen)){
+   state.sentenceOpen.forEach((show,i)=>{if(i<sentenceToggles.length)toggleSentence(i,!!show);});
+  }
+  if(state.sections&&typeof state.sections==='object'){
+   document.querySelectorAll('.window-toggle').forEach(button=>{
+    const id=button.getAttribute('aria-controls');
+    if(Object.prototype.hasOwnProperty.call(state.sections,id))toggleSection(button,!!state.sections[id]);
+   });
+  }
+  if(typeof state.fullPassageOpen==='boolean'){
+   fullPassage.hidden=!state.fullPassageOpen;
+   if(fullPassageNotice)fullPassageNotice.hidden=!state.fullPassageOpen;
+   fullPassageButton.setAttribute('aria-expanded',String(state.fullPassageOpen));
+  }
+  dictionaryAll=state.dictionaryAll===true;
+  dictionarySentence=Number.isInteger(state.dictionarySentence)&&state.dictionarySentence>=0&&state.dictionarySentence<audios.length
+   ?state.dictionarySentence:-1;
+  syncDictionaryUI();
+  applyMode();
+  update();
+  requestAnimationFrame(()=>window.scrollTo({top:Number(state.scrollY)||0,left:0,behavior:'auto'}));
+ }
+ function isMobileDictionaryView(){
+  return (window.matchMedia&&(
+   window.matchMedia('(max-width:760px)').matches||
+   window.matchMedia('(pointer:coarse)').matches
+  ));
+ }
  function openNaverDictionary(button){
   const term=dictionaryTerm(button);if(!term)return;
   pauseForDictionary();
   message='네이버 사전 검색 중 · 음성 일시정지';
   update();
-  window.open('https://en.dict.naver.com/#/search?query='+encodeURIComponent(term),'_blank','noopener,noreferrer');
+  const url='https://en.dict.naver.com/#/search?query='+encodeURIComponent(term);
+  if(isMobileDictionaryView()){
+   saveDictionaryReturnState();
+   window.location.assign(url);
+  }else{
+   window.open(url,'_blank','noopener,noreferrer');
+  }
  }
  function updateDictionaryToken(button,enabled){
   if(!button)return;
@@ -865,6 +934,29 @@ html{overflow-y:scroll;scrollbar-gutter:stable}
   active=-1;errorBox.hidden=true;cancelAnimationFrame(frame);frame=0;update();
  }
 
+ function deactivateDictionaryBeforeOtherButton(event){
+  if(!dictionaryModeActive())return;
+  const target=event.target;
+  const button=target&&typeof target.closest==='function'?target.closest('button'):null;
+  if(!button)return;
+  if(button.classList.contains('naver-dict-button'))return;
+  if(button.classList.contains('word-token')){
+   const i=Number(button.dataset.index);
+   if(dictionaryAppliesTo(i))return;
+  }
+  deactivateDictionaryMode();
+ }
+ if(window.PointerEvent){
+  document.addEventListener('pointerdown',event=>{
+   if(isMobileDictionaryView())deactivateDictionaryBeforeOtherButton(event);
+  },true);
+ }else{
+  document.addEventListener('touchstart',event=>{
+   if(isMobileDictionaryView())deactivateDictionaryBeforeOtherButton(event);
+  },{capture:true,passive:true});
+ }
+ document.addEventListener('click',deactivateDictionaryBeforeOtherButton,true);
+
  document.querySelector('.lesson-list').addEventListener('click',event=>{
   const button=event.target.closest('button[data-action]');if(!button)return;
   const i=Number(button.dataset.index),action=button.dataset.action;
@@ -962,6 +1054,7 @@ html{overflow-y:scroll;scrollbar-gutter:stable}
  });
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)animate();});
  window.addEventListener('pagehide',()=>{++token;audios.forEach(a=>a.pause());cancelAnimationFrame(frame);});
+ window.addEventListener('pageshow',restoreDictionaryReturnState);
  sentenceToggles.forEach((_,i)=>toggleSentence(i,false));
  document.querySelectorAll('.window-toggle').forEach(button=>toggleSection(button,false));
  syncDictionaryUI();
